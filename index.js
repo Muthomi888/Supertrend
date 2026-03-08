@@ -7,7 +7,7 @@ const CONFIG = {
   TELEGRAM_CHAT_ID:   '6466334989',
   DERIV_APP_ID:       '1089',
   SYMBOLS:            ['R_10', 'R_25'],
-  TIMEFRAMES:         ['5min', '15min', '1hr'],
+  TIMEFRAMES:         ['5min', /*'15min', '1hr'*/],
   SUPERTREND: {
     period:     1,
     multiplier: 1,
