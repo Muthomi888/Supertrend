@@ -31,16 +31,19 @@ const displayNames = {
 // ─── STATE ────────────────────────────────────────────────────────
 const historicalData  = {};
 const currentCandles  = {};
-const trendState      = {};
+const trendState      = {};  // 'uptrend' | 'downtrend' | null
+const signalLevel     = {};  // SuperTrend level locked at last signal
 
 CONFIG.SYMBOLS.forEach(sym => {
   historicalData[sym] = {};
   currentCandles[sym] = {};
   trendState[sym]     = {};
+  signalLevel[sym]    = {};
   CONFIG.TIMEFRAMES.forEach(tf => {
     historicalData[sym][tf] = [];
     currentCandles[sym][tf] = null;
     trendState[sym][tf]     = null;
+    signalLevel[sym][tf]    = null;
   });
 });
 
@@ -65,40 +68,48 @@ async function sendTelegram(message) {
   }
 }
 
-// ─── TREND CHANGE (candle-close only) ────────────────────────────
-async function checkTrendChangeOnClose(symbol, timeframe, newTrend, value) {
+// ─── TREND CHANGE ─────────────────────────────────────────────────
+// Fires exactly ONCE per flip. Locked until the opposite signal occurs.
+async function checkTrendChange(symbol, timeframe, newTrend, level, price) {
   const prev = trendState[symbol][timeframe];
 
+  // First run — seed state silently, no notification
   if (prev === null) {
     trendState[symbol][timeframe] = newTrend;
+    signalLevel[symbol][timeframe] = level;
     return;
   }
 
-  if (prev !== newTrend) {
-    const symName = displayNames[symbol];
-    const tfName  = displayNames[timeframe];
-    const now     = new Date().toUTCString();
+  // Same trend — nothing to do, signal already fired and locked
+  if (prev === newTrend) return;
 
-    let message = '';
-    if (newTrend === 'uptrend') {
-      message =
-        `🟢 *TREND CHANGE — BULLISH*\n` +
-        `*${symName}* switched to *UPTREND* on *${tfName}*\n` +
-        `Supertrend: \`${value.toFixed(4)}\`\n` +
-        `🕐 ${now}\n` +
-        `_(confirmed on candle close)_`;
-    } else {
-      message =
-        `🔴 *TREND CHANGE — BEARISH*\n` +
-        `*${symName}* switched to *DOWNTREND* on *${tfName}*\n` +
-        `Supertrend: \`${value.toFixed(4)}\`\n` +
-        `🕐 ${now}\n` +
-        `_(confirmed on candle close)_`;
-    }
+  // ── Trend has flipped — fire signal and lock ────────────────────
+  const symName  = displayNames[symbol];
+  const tfName   = displayNames[timeframe];
+  const now      = new Date().toUTCString();
 
-    await sendTelegram(message);
-    trendState[symbol][timeframe] = newTrend;
+  let message = '';
+  if (newTrend === 'uptrend') {
+    message =
+      `🟢 *BUY SIGNAL*\n` +
+      `*${symName}* | *${tfName}*\n` +
+      `📍 SuperTrend Level: \`${level.toFixed(4)}\`\n` +
+      `💰 Price at Signal: \`${price.toFixed(4)}\`\n` +
+      `🕐 ${now}`;
+  } else {
+    message =
+      `🔴 *SELL SIGNAL*\n` +
+      `*${symName}* | *${tfName}*\n` +
+      `📍 SuperTrend Level: \`${level.toFixed(4)}\`\n` +
+      `💰 Price at Signal: \`${price.toFixed(4)}\`\n` +
+      `🕐 ${now}`;
   }
+
+  await sendTelegram(message);
+
+  // Lock new state — no further signals until opposite flip
+  trendState[symbol][timeframe] = newTrend;
+  signalLevel[symbol][timeframe] = level;
 }
 
 // ─── SUPERTREND MATHS ─────────────────────────────────────────────
@@ -208,24 +219,11 @@ async function updateCurrentCandle(symbol, price, timestamp) {
     if (!currentCandles[symbol][timeframe] ||
         currentCandles[symbol][timeframe].timestamp !== candleTime) {
 
-      // ── Candle just CLOSED ──────────────────────────────────────
+      // ── Roll closed candle into history ────────────────────────
       if (currentCandles[symbol][timeframe]) {
         historicalData[symbol][timeframe].push(currentCandles[symbol][timeframe]);
-
         if (historicalData[symbol][timeframe].length > CONFIG.MAX_CANDLES) {
           historicalData[symbol][timeframe].shift();
-        }
-
-        // Calculate supertrend on closed candles only → send notification if trend changed
-        const result = calcSupertrend(
-          historicalData[symbol][timeframe],
-          CONFIG.SUPERTREND.period,
-          CONFIG.SUPERTREND.multiplier
-        );
-
-        if (result) {
-          console.log(`[${symbol}][${timeframe}] Candle closed → trend: ${result.trend} | value: ${result.value.toFixed(4)}`);
-          await checkTrendChangeOnClose(symbol, timeframe, result.trend, result.value);
         }
       }
 
@@ -239,10 +237,20 @@ async function updateCurrentCandle(symbol, price, timestamp) {
       };
 
     } else {
-      const c   = currentCandles[symbol][timeframe];
-      c.high    = Math.max(c.high, price);
-      c.low     = Math.min(c.low,  price);
-      c.close   = price;
+      // Update live candle with latest tick
+      const c = currentCandles[symbol][timeframe];
+      c.high  = Math.max(c.high, price);
+      c.low   = Math.min(c.low,  price);
+      c.close = price;
+    }
+
+    // ── Check SuperTrend on every tick ─────────────────────────
+    const liveData = [...historicalData[symbol][timeframe], currentCandles[symbol][timeframe]];
+    const result   = calcSupertrend(liveData, CONFIG.SUPERTREND.period, CONFIG.SUPERTREND.multiplier);
+
+    if (result) {
+      console.log(`[${symbol}][${timeframe}] Price: ${price.toFixed(4)} | Trend: ${result.trend} | Level: ${result.value.toFixed(4)}`);
+      await checkTrendChange(symbol, timeframe, result.trend, result.value, price);
     }
   }
 }
@@ -274,9 +282,10 @@ function processCandles(symbol, timeframe, candles) {
   const result   = calcSupertrend(combined, CONFIG.SUPERTREND.period, CONFIG.SUPERTREND.multiplier);
 
   if (result) {
-    // Initialise trend state — no notification on startup
-    trendState[symbol][timeframe] = result.trend;
-    console.log(`[${symbol}][${timeframe}] Loaded ${data.length} candles → initial trend: ${result.trend}`);
+    // Initialise state — no notification on startup
+    trendState[symbol][timeframe]  = result.trend;
+    signalLevel[symbol][timeframe] = result.value;
+    console.log(`[${symbol}][${timeframe}] Loaded ${data.length} candles → initial trend: ${result.trend} | level: ${result.value.toFixed(4)}`);
   }
 }
 
