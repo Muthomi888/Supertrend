@@ -7,7 +7,7 @@ const CONFIG = {
   TELEGRAM_CHAT_ID:   '6466334989',
   DERIV_APP_ID:       '1089',
   SYMBOLS:            ['R_10', 'R_25'],
-  TIMEFRAMES:         ['5min', '15min', '1hr'],
+  TIMEFRAMES:         ['5min'],
   SUPERTREND: {
     period:     1,
     multiplier: 1,
@@ -19,17 +19,13 @@ const CONFIG = {
 const API_URL = `wss://ws.derivws.com/websockets/v3?app_id=${CONFIG.DERIV_APP_ID}`;
 
 const timeframeMap = {
-  '5min':  300,
-  '15min': 900,
-  '1hr':   3600,
+  '5min': 300,
 };
 
 const displayNames = {
-  'R_10':  'Volatility 10 Index',
-  'R_25':  'Volatility 25 Index',
-  '5min':  '5 minutes',
-  '15min': '15 minutes',
-  '1hr':   '1 hour',
+  'R_10': 'Volatility 10 Index',
+  'R_25': 'Volatility 25 Index',
+  '5min': '5 minutes',
 };
 
 // ─── STATE ────────────────────────────────────────────────────────
@@ -106,13 +102,33 @@ async function checkTrendChangeOnClose(symbol, timeframe, newTrend, value) {
 }
 
 // ─── SUPERTREND MATHS ─────────────────────────────────────────────
-function calcRMA(data, period) {
+function calcWMA(data, period) {
   if (data.length < period) return [];
-  const result = [data.slice(0, period).reduce((a, b) => a + b, 0) / period];
-  for (let i = period; i < data.length; i++) {
-    result.push(data[i] * (1 / period) + result[result.length - 1] * (1 - 1 / period));
+  const result  = [];
+  const weights = period * (period + 1) / 2;
+  for (let i = period - 1; i < data.length; i++) {
+    let sum = 0;
+    for (let j = 0; j < period; j++) {
+      sum += data[i - j] * (period - j);
+    }
+    result.push(sum / weights);
   }
   return result;
+}
+
+function calcHMA(data, period) {
+  if (data.length < period) return [];
+  const halfPeriod = Math.max(1, Math.floor(period / 2));
+  const sqrtPeriod = Math.max(1, Math.round(Math.sqrt(period)));
+
+  const wmaHalf = calcWMA(data, halfPeriod);
+  const wmaFull = calcWMA(data, period);
+
+  // Align series — wmaFull is shorter; build 2*WMA(half) - WMA(full)
+  const offset = wmaHalf.length - wmaFull.length;
+  const diff   = wmaFull.map((val, i) => 2 * wmaHalf[i + offset] - val);
+
+  return calcWMA(diff, sqrtPeriod);
 }
 
 function calcTR(data) {
@@ -129,7 +145,7 @@ function calcTR(data) {
 function calcSupertrend(data, period, multiplier) {
   if (data.length < period + 1) return null;
 
-  const atr     = calcRMA(calcTR(data), period);
+  const atr     = calcHMA(calcTR(data), period);
   const offset  = data.length - atr.length;
   const results = [];
 
