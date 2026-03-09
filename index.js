@@ -7,7 +7,7 @@ const CONFIG = {
   TELEGRAM_CHAT_ID:   '6466334989',
   DERIV_APP_ID:       '1089',
   SYMBOLS:            ['R_10', 'R_25'],
-  TIMEFRAMES:         ['5min'],
+  TIMEFRAMES:         ['15min', '1hr'],
   SUPERTREND: {
     period:     1,
     multiplier: 1,
@@ -19,13 +19,15 @@ const CONFIG = {
 const API_URL = `wss://ws.derivws.com/websockets/v3?app_id=${CONFIG.DERIV_APP_ID}`;
 
 const timeframeMap = {
-  '5min': 300,
+  '15min': 900,
+  '1hr':   3600,
 };
 
 const displayNames = {
-  'R_10': 'Volatility 10 Index',
-  'R_25': 'Volatility 25 Index',
-  '5min': '5 minutes',
+  'R_10':  'Volatility 10 Index',
+  'R_25':  'Volatility 25 Index',
+  '15min': '15 minutes',
+  '1hr':   '1 hour',
 };
 
 // ─── STATE ────────────────────────────────────────────────────────
@@ -87,10 +89,6 @@ async function checkTrendChange(symbol, timeframe, newTrend, level, candle) {
   const symName   = displayNames[symbol];
   const tfName    = displayNames[timeframe];
   const closeTime = new Date(candle.timestamp * 1000).toUTCString();
-  const prevLevel = signalLevel[symbol][timeframe];
-
-  const body    = Math.abs(candle.close - candle.open).toFixed(4);
-  const prevLvl = prevLevel !== null ? prevLevel.toFixed(4) : '—';
 
   let message = '';
   if (newTrend === 'uptrend') {
@@ -99,28 +97,16 @@ async function checkTrendChange(symbol, timeframe, newTrend, level, candle) {
       `━━━━━━━━━━━━━━━━━━━━\n` +
       `*${symName}* | *${tfName}*\n` +
       `\n` +
-      `📊 *Closed Candle*\n` +
-      `  O: \`${candle.open.toFixed(4)}\`  H: \`${candle.high.toFixed(4)}\`\n` +
-      `  L: \`${candle.low.toFixed(4)}\`   C: \`${candle.close.toFixed(4)}\`\n` +
-      `  Body: \`${body}\`\n` +
-      `\n` +
-      `📍 *SuperTrend Crossed:* \`${level.toFixed(4)}\`\n` +
-      `📌 *Prev Signal Level:* \`${prevLvl}\`\n` +
-      `🕐 Candle Close: ${closeTime}`;
+      `*SuperTrend Level:* \`${level.toFixed(4)}\`\n` +
+      `Candle Close: ${closeTime}`;
   } else {
     message =
       `🔴 *SELL SIGNAL — CANDLE CONFIRMED*\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
       `*${symName}* | *${tfName}*\n` +
       `\n` +
-      `📊 *Closed Candle*\n` +
-      `  O: \`${candle.open.toFixed(4)}\`  H: \`${candle.high.toFixed(4)}\`\n` +
-      `  L: \`${candle.low.toFixed(4)}\`   C: \`${candle.close.toFixed(4)}\`\n` +
-      `  Body: \`${body}\`\n` +
-      `\n` +
-      `📍 *SuperTrend Crossed:* \`${level.toFixed(4)}\`\n` +
-      `📌 *Prev Signal Level:* \`${prevLvl}\`\n` +
-      `🕐 Candle Close: ${closeTime}`;
+      `*SuperTrend Level:* \`${level.toFixed(4)}\`\n` +
+      `Candle Close: ${closeTime}`;
   }
 
   await sendTelegram(message);
