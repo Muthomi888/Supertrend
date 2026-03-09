@@ -69,46 +69,64 @@ async function sendTelegram(message) {
 }
 
 // ─── TREND CHANGE ─────────────────────────────────────────────────
-// Fires exactly ONCE per flip. Locked until the opposite signal occurs.
-async function checkTrendChange(symbol, timeframe, newTrend, level, price) {
+// Fires exactly ONCE per candle-close flip. Locked until opposite signal.
+async function checkTrendChange(symbol, timeframe, newTrend, level, candle) {
   const prev = trendState[symbol][timeframe];
 
   // First run — seed state silently, no notification
   if (prev === null) {
-    trendState[symbol][timeframe] = newTrend;
+    trendState[symbol][timeframe]  = newTrend;
     signalLevel[symbol][timeframe] = level;
     return;
   }
 
-  // Same trend — nothing to do, signal already fired and locked
+  // Same trend — still locked, nothing to do
   if (prev === newTrend) return;
 
-  // ── Trend has flipped — fire signal and lock ────────────────────
-  const symName  = displayNames[symbol];
-  const tfName   = displayNames[timeframe];
-  const now      = new Date().toUTCString();
+  // ── Trend has flipped on candle close — fire signal and lock ───
+  const symName   = displayNames[symbol];
+  const tfName    = displayNames[timeframe];
+  const closeTime = new Date(candle.timestamp * 1000).toUTCString();
+  const prevLevel = signalLevel[symbol][timeframe];
+
+  const body    = Math.abs(candle.close - candle.open).toFixed(4);
+  const prevLvl = prevLevel !== null ? prevLevel.toFixed(4) : '—';
 
   let message = '';
   if (newTrend === 'uptrend') {
     message =
-      `🟢 *BUY SIGNAL*\n` +
+      `🟢 *BUY SIGNAL — CANDLE CONFIRMED*\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
       `*${symName}* | *${tfName}*\n` +
-      `📍 SuperTrend Level: \`${level.toFixed(4)}\`\n` +
-      `💰 Price at Signal: \`${price.toFixed(4)}\`\n` +
-      `🕐 ${now}`;
+      `\n` +
+      `📊 *Closed Candle*\n` +
+      `  O: \`${candle.open.toFixed(4)}\`  H: \`${candle.high.toFixed(4)}\`\n` +
+      `  L: \`${candle.low.toFixed(4)}\`   C: \`${candle.close.toFixed(4)}\`\n` +
+      `  Body: \`${body}\`\n` +
+      `\n` +
+      `📍 *SuperTrend Crossed:* \`${level.toFixed(4)}\`\n` +
+      `📌 *Prev Signal Level:* \`${prevLvl}\`\n` +
+      `🕐 Candle Close: ${closeTime}`;
   } else {
     message =
-      `🔴 *SELL SIGNAL*\n` +
+      `🔴 *SELL SIGNAL — CANDLE CONFIRMED*\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
       `*${symName}* | *${tfName}*\n` +
-      `📍 SuperTrend Level: \`${level.toFixed(4)}\`\n` +
-      `💰 Price at Signal: \`${price.toFixed(4)}\`\n` +
-      `🕐 ${now}`;
+      `\n` +
+      `📊 *Closed Candle*\n` +
+      `  O: \`${candle.open.toFixed(4)}\`  H: \`${candle.high.toFixed(4)}\`\n` +
+      `  L: \`${candle.low.toFixed(4)}\`   C: \`${candle.close.toFixed(4)}\`\n` +
+      `  Body: \`${body}\`\n` +
+      `\n` +
+      `📍 *SuperTrend Crossed:* \`${level.toFixed(4)}\`\n` +
+      `📌 *Prev Signal Level:* \`${prevLvl}\`\n` +
+      `🕐 Candle Close: ${closeTime}`;
   }
 
   await sendTelegram(message);
 
   // Lock new state — no further signals until opposite flip
-  trendState[symbol][timeframe] = newTrend;
+  trendState[symbol][timeframe]  = newTrend;
   signalLevel[symbol][timeframe] = level;
 }
 
@@ -215,19 +233,42 @@ async function updateCurrentCandle(symbol, price, timestamp) {
   for (const timeframe of CONFIG.TIMEFRAMES) {
     const granularity = timeframeMap[timeframe];
     const candleTime  = getCandleTime(timestamp, granularity);
+    const existing    = currentCandles[symbol][timeframe];
 
-    if (!currentCandles[symbol][timeframe] ||
-        currentCandles[symbol][timeframe].timestamp !== candleTime) {
+    if (!existing || existing.timestamp !== candleTime) {
 
-      // ── Roll closed candle into history ────────────────────────
-      if (currentCandles[symbol][timeframe]) {
-        historicalData[symbol][timeframe].push(currentCandles[symbol][timeframe]);
+      // ── A new candle period has started — the previous one just closed ──
+      if (existing) {
+        const closedCandle = { ...existing };
+
+        // Push closed candle into history
+        historicalData[symbol][timeframe].push(closedCandle);
         if (historicalData[symbol][timeframe].length > CONFIG.MAX_CANDLES) {
           historicalData[symbol][timeframe].shift();
         }
+
+        // Run SuperTrend on confirmed closed candles only
+        const result = calcSupertrend(
+          historicalData[symbol][timeframe],
+          CONFIG.SUPERTREND.period,
+          CONFIG.SUPERTREND.multiplier
+        );
+
+        if (result) {
+          console.log(
+            `[${symbol}][${timeframe}] ✅ Candle closed` +
+            ` | O:${closedCandle.open.toFixed(4)}` +
+            ` H:${closedCandle.high.toFixed(4)}` +
+            ` L:${closedCandle.low.toFixed(4)}` +
+            ` C:${closedCandle.close.toFixed(4)}` +
+            ` | Trend: ${result.trend}` +
+            ` | ST Level: ${result.value.toFixed(4)}`
+          );
+          await checkTrendChange(symbol, timeframe, result.trend, result.value, closedCandle);
+        }
       }
 
-      // Start new candle
+      // Open new live candle
       currentCandles[symbol][timeframe] = {
         timestamp: candleTime,
         open:  price,
@@ -237,20 +278,10 @@ async function updateCurrentCandle(symbol, price, timestamp) {
       };
 
     } else {
-      // Update live candle with latest tick
-      const c = currentCandles[symbol][timeframe];
-      c.high  = Math.max(c.high, price);
-      c.low   = Math.min(c.low,  price);
-      c.close = price;
-    }
-
-    // ── Check SuperTrend on every tick ─────────────────────────
-    const liveData = [...historicalData[symbol][timeframe], currentCandles[symbol][timeframe]];
-    const result   = calcSupertrend(liveData, CONFIG.SUPERTREND.period, CONFIG.SUPERTREND.multiplier);
-
-    if (result) {
-      console.log(`[${symbol}][${timeframe}] Price: ${price.toFixed(4)} | Trend: ${result.trend} | Level: ${result.value.toFixed(4)}`);
-      await checkTrendChange(symbol, timeframe, result.trend, result.value, price);
+      // Update in-progress candle tick by tick
+      existing.high  = Math.max(existing.high, price);
+      existing.low   = Math.min(existing.low,  price);
+      existing.close = price;
     }
   }
 }
