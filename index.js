@@ -117,33 +117,17 @@ async function checkTrendChange(symbol, timeframe, newTrend, level, candle) {
 }
 
 // ─── SUPERTREND MATHS ─────────────────────────────────────────────
-function calcWMA(data, period) {
+function calcRMA(data, period) {
   if (data.length < period) return [];
-  const result  = [];
-  const weights = period * (period + 1) / 2;
-  for (let i = period - 1; i < data.length; i++) {
-    let sum = 0;
-    for (let j = 0; j < period; j++) {
-      sum += data[i - j] * (period - j);
-    }
-    result.push(sum / weights);
+  const result = [];
+  // Seed with simple average of first `period` values (Wilder's method)
+  let rma = data.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  result.push(rma);
+  for (let i = period; i < data.length; i++) {
+    rma = (rma * (period - 1) + data[i]) / period;
+    result.push(rma);
   }
   return result;
-}
-
-function calcHMA(data, period) {
-  if (data.length < period) return [];
-  const halfPeriod = Math.max(1, Math.floor(period / 2));
-  const sqrtPeriod = Math.max(1, Math.round(Math.sqrt(period)));
-
-  const wmaHalf = calcWMA(data, halfPeriod);
-  const wmaFull = calcWMA(data, period);
-
-  // Align series — wmaFull is shorter; build 2*WMA(half) - WMA(full)
-  const offset = wmaHalf.length - wmaFull.length;
-  const diff   = wmaFull.map((val, i) => 2 * wmaHalf[i + offset] - val);
-
-  return calcWMA(diff, sqrtPeriod);
 }
 
 function calcTR(data) {
@@ -160,7 +144,7 @@ function calcTR(data) {
 function calcSupertrend(data, period, multiplier) {
   if (data.length < period + 1) return null;
 
-  const atr     = calcHMA(calcTR(data), period);
+  const atr     = calcRMA(calcTR(data), period);
   const offset  = data.length - atr.length;
   const results = [];
 
@@ -169,10 +153,10 @@ function calcSupertrend(data, period, multiplier) {
     if (ai < 0) continue;
     const hl2 = (data[i].high + data[i].low) / 2;
     results.push({
-      index:          i,
-      basicUpper:     hl2 + multiplier * atr[ai],
-      basicLower:     hl2 - multiplier * atr[ai],
-      close:          data[i].close,
+      index:      i,
+      basicUpper: hl2 + multiplier * atr[ai],
+      basicLower: hl2 - multiplier * atr[ai],
+      close:      data[i].close,
     });
   }
 
@@ -195,7 +179,7 @@ function calcSupertrend(data, period, multiplier) {
       (i > 0 && data[results[i - 1].index].close < prevLower)
         ? cur.basicLower : prevLower;
 
-    if      (i === 0)                   cur.trend = prevTrend;
+    if      (i === 0)                    cur.trend = prevTrend;
     else if (cur.close > cur.finalUpper) cur.trend = 'uptrend';
     else if (cur.close < cur.finalLower) cur.trend = 'downtrend';
     else                                 cur.trend = prevTrend;
@@ -318,11 +302,11 @@ function send(msg) {
 function requestCandles(symbol, timeframe) {
   const granularity = timeframeMap[timeframe];
   send({
-    ticks_history:    symbol,
+    ticks_history:     symbol,
     adjust_start_time: 1,
-    count:            CONFIG.MAX_CANDLES,
-    end:              'latest',
-    style:            'candles',
+    count:             CONFIG.MAX_CANDLES,
+    end:               'latest',
+    style:             'candles',
     granularity,
   });
 }
