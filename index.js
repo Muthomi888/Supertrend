@@ -33,19 +33,22 @@ const displayNames = {
 // ─── STATE ────────────────────────────────────────────────────────
 const historicalData  = {};
 const currentCandles  = {};
-const trendState      = {};  // 'uptrend' | 'downtrend' | null
-const signalLevel     = {};  // SuperTrend level locked at last signal
+const trendState      = {};
+const signalLevel     = {};
+const initialized     = {};   // ✅ NEW: track if a pair has been loaded
 
 CONFIG.SYMBOLS.forEach(sym => {
   historicalData[sym] = {};
   currentCandles[sym] = {};
   trendState[sym]     = {};
   signalLevel[sym]    = {};
+  initialized[sym]    = {};
   CONFIG.TIMEFRAMES.forEach(tf => {
     historicalData[sym][tf] = [];
     currentCandles[sym][tf] = null;
     trendState[sym][tf]     = null;
     signalLevel[sym][tf]    = null;
+    initialized[sym][tf]    = false;   // ✅ start as not loaded
   });
 });
 
@@ -71,21 +74,17 @@ async function sendTelegram(message) {
 }
 
 // ─── TREND CHANGE ─────────────────────────────────────────────────
-// Fires exactly ONCE per live-tick flip. Locked until opposite signal.
 async function checkTrendChange(symbol, timeframe, newTrend, level, timestamp) {
   const prev = trendState[symbol][timeframe];
 
-  // First run — seed state silently, no notification
   if (prev === null) {
     trendState[symbol][timeframe]  = newTrend;
     signalLevel[symbol][timeframe] = level;
     return;
   }
 
-  // Same trend — still locked, nothing to do
   if (prev === newTrend) return;
 
-  // ── Trend has flipped on live tick — fire signal and lock ──────
   const symName  = displayNames[symbol];
   const tfName   = displayNames[timeframe];
   const flipTime = new Date(timestamp * 1000).toUTCString();
@@ -111,16 +110,14 @@ async function checkTrendChange(symbol, timeframe, newTrend, level, timestamp) {
 
   await sendTelegram(message);
 
-  // Lock new state — no further signals until opposite flip
   trendState[symbol][timeframe]  = newTrend;
   signalLevel[symbol][timeframe] = level;
 }
 
-// ─── SUPERTREND MATHS ─────────────────────────────────────────────
+// ─── SUPERTREND MATHS (unchanged) ────────────────────────────────
 function calcRMA(data, period) {
   if (data.length < period) return [];
   const result = [];
-  // Seed with simple average of first `period` values (Wilder's method)
   let rma = data.slice(0, period).reduce((a, b) => a + b, 0) / period;
   result.push(rma);
   for (let i = period; i < data.length; i++) {
@@ -206,17 +203,12 @@ async function updateCurrentCandle(symbol, price, timestamp) {
     const existing    = currentCandles[symbol][timeframe];
 
     if (!existing || existing.timestamp !== candleTime) {
-
-      // ── A new candle period has started — the previous one just closed ──
       if (existing) {
         const closedCandle = { ...existing };
-
-        // Push closed candle into history
         historicalData[symbol][timeframe].push(closedCandle);
         if (historicalData[symbol][timeframe].length > CONFIG.MAX_CANDLES) {
           historicalData[symbol][timeframe].shift();
         }
-
         console.log(
           `[${symbol}][${timeframe}] ✅ Candle closed` +
           ` | O:${closedCandle.open.toFixed(4)}` +
@@ -226,7 +218,6 @@ async function updateCurrentCandle(symbol, price, timestamp) {
         );
       }
 
-      // Open new live candle
       currentCandles[symbol][timeframe] = {
         timestamp: candleTime,
         open:  price,
@@ -234,15 +225,12 @@ async function updateCurrentCandle(symbol, price, timestamp) {
         low:   price,
         close: price,
       };
-
     } else {
-      // Update in-progress candle tick by tick
       existing.high  = Math.max(existing.high, price);
       existing.low   = Math.min(existing.low,  price);
       existing.close = price;
     }
 
-    // ── Run SuperTrend on every tick (historical + live candle) ──
     const liveCandle = currentCandles[symbol][timeframe];
     const combined   = [...historicalData[symbol][timeframe], liveCandle];
     const result     = calcSupertrend(combined, CONFIG.SUPERTREND.period, CONFIG.SUPERTREND.multiplier);
@@ -261,6 +249,12 @@ async function updateCurrentCandle(symbol, price, timestamp) {
 
 // ─── BOOTSTRAP HISTORICAL CANDLES ────────────────────────────────
 function processCandles(symbol, timeframe, candles) {
+  // ✅ Skip if already initialized (prevents re‑initialization on reconnect)
+  if (initialized[symbol][timeframe]) {
+    console.log(`[${symbol}][${timeframe}] Already initialized, skipping re‑load.`);
+    return;
+  }
+
   const data = candles.map(c => ({
     open:      parseFloat(c.open),
     high:      parseFloat(c.high),
@@ -286,11 +280,13 @@ function processCandles(symbol, timeframe, candles) {
   const result   = calcSupertrend(combined, CONFIG.SUPERTREND.period, CONFIG.SUPERTREND.multiplier);
 
   if (result) {
-    // Initialise state — no notification on startup
     trendState[symbol][timeframe]  = result.trend;
     signalLevel[symbol][timeframe] = result.value;
     console.log(`[${symbol}][${timeframe}] Loaded ${data.length} candles → initial trend: ${result.trend} | level: ${result.value.toFixed(4)}`);
   }
+
+  // ✅ Mark as initialized
+  initialized[symbol][timeframe] = true;
 }
 
 // ─── WEBSOCKET ────────────────────────────────────────────────────
@@ -303,6 +299,9 @@ function send(msg) {
 }
 
 function requestCandles(symbol, timeframe) {
+  // ✅ Only request candles if not already initialized
+  if (initialized[symbol][timeframe]) return;
+
   const granularity = timeframeMap[timeframe];
   send({
     ticks_history:     symbol,
