@@ -71,8 +71,8 @@ async function sendTelegram(message) {
 }
 
 // ─── TREND CHANGE ─────────────────────────────────────────────────
-// Fires exactly ONCE per candle-close flip. Locked until opposite signal.
-async function checkTrendChange(symbol, timeframe, newTrend, level, candle) {
+// Fires exactly ONCE per live-tick flip. Locked until opposite signal.
+async function checkTrendChange(symbol, timeframe, newTrend, level, timestamp) {
   const prev = trendState[symbol][timeframe];
 
   // First run — seed state silently, no notification
@@ -85,28 +85,28 @@ async function checkTrendChange(symbol, timeframe, newTrend, level, candle) {
   // Same trend — still locked, nothing to do
   if (prev === newTrend) return;
 
-  // ── Trend has flipped on candle close — fire signal and lock ───
-  const symName   = displayNames[symbol];
-  const tfName    = displayNames[timeframe];
-  const closeTime = new Date(candle.timestamp * 1000).toUTCString();
+  // ── Trend has flipped on live tick — fire signal and lock ──────
+  const symName  = displayNames[symbol];
+  const tfName   = displayNames[timeframe];
+  const flipTime = new Date(timestamp * 1000).toUTCString();
 
   let message = '';
   if (newTrend === 'uptrend') {
     message =
-      `🟢 *BUY SIGNAL — CANDLE CONFIRMED*\n` +
+      `🟢 *BUY SIGNAL — LIVE FLIP*\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
       `*${symName}* | *${tfName}*\n` +
       `\n` +
       `*SuperTrend Level:* \`${level.toFixed(4)}\`\n` +
-      `Candle Close: ${closeTime}`;
+      `Time: ${flipTime}`;
   } else {
     message =
-      `🔴 *SELL SIGNAL — CANDLE CONFIRMED*\n` +
+      `🔴 *SELL SIGNAL — LIVE FLIP*\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
       `*${symName}* | *${tfName}*\n` +
       `\n` +
       `*SuperTrend Level:* \`${level.toFixed(4)}\`\n` +
-      `Candle Close: ${closeTime}`;
+      `Time: ${flipTime}`;
   }
 
   await sendTelegram(message);
@@ -217,25 +217,13 @@ async function updateCurrentCandle(symbol, price, timestamp) {
           historicalData[symbol][timeframe].shift();
         }
 
-        // Run SuperTrend on confirmed closed candles only
-        const result = calcSupertrend(
-          historicalData[symbol][timeframe],
-          CONFIG.SUPERTREND.period,
-          CONFIG.SUPERTREND.multiplier
+        console.log(
+          `[${symbol}][${timeframe}] ✅ Candle closed` +
+          ` | O:${closedCandle.open.toFixed(4)}` +
+          ` H:${closedCandle.high.toFixed(4)}` +
+          ` L:${closedCandle.low.toFixed(4)}` +
+          ` C:${closedCandle.close.toFixed(4)}`
         );
-
-        if (result) {
-          console.log(
-            `[${symbol}][${timeframe}] ✅ Candle closed` +
-            ` | O:${closedCandle.open.toFixed(4)}` +
-            ` H:${closedCandle.high.toFixed(4)}` +
-            ` L:${closedCandle.low.toFixed(4)}` +
-            ` C:${closedCandle.close.toFixed(4)}` +
-            ` | Trend: ${result.trend}` +
-            ` | ST Level: ${result.value.toFixed(4)}`
-          );
-          await checkTrendChange(symbol, timeframe, result.trend, result.value, closedCandle);
-        }
       }
 
       // Open new live candle
@@ -252,6 +240,21 @@ async function updateCurrentCandle(symbol, price, timestamp) {
       existing.high  = Math.max(existing.high, price);
       existing.low   = Math.min(existing.low,  price);
       existing.close = price;
+    }
+
+    // ── Run SuperTrend on every tick (historical + live candle) ──
+    const liveCandle = currentCandles[symbol][timeframe];
+    const combined   = [...historicalData[symbol][timeframe], liveCandle];
+    const result     = calcSupertrend(combined, CONFIG.SUPERTREND.period, CONFIG.SUPERTREND.multiplier);
+
+    if (result) {
+      console.log(
+        `[${symbol}][${timeframe}] Tick` +
+        ` | Price: ${price.toFixed(4)}` +
+        ` | Trend: ${result.trend}` +
+        ` | ST Level: ${result.value.toFixed(4)}`
+      );
+      await checkTrendChange(symbol, timeframe, result.trend, result.value, timestamp);
     }
   }
 }
