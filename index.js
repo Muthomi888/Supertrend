@@ -7,7 +7,7 @@ const CONFIG = {
   TELEGRAM_CHAT_ID:   '6466334989',
   DERIV_APP_ID:       '1089',
   SYMBOLS:            ['R_10', 'R_25'],
-  TIMEFRAMES:         ['15min', '1hr'],
+  TIMEFRAMES:         ['5min', '15min'],
   SUPERTREND: {
     period:     1,
     multiplier: 1,
@@ -19,15 +19,15 @@ const CONFIG = {
 const API_URL = `wss://ws.derivws.com/websockets/v3?app_id=${CONFIG.DERIV_APP_ID}`;
 
 const timeframeMap = {
+  '5min':  300,
   '15min': 900,
-  '1hr':   3600,
 };
 
 const displayNames = {
   'R_10':  'Volatility 10 Index',
   'R_25':  'Volatility 25 Index',
+  '5min':  '5 minutes',
   '15min': '15 minutes',
-  '1hr':   '1 hour',
 };
 
 // ─── STATE ────────────────────────────────────────────────────────
