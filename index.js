@@ -35,20 +35,23 @@ const historicalData  = {};
 const currentCandles  = {};
 const trendState      = {};
 const signalLevel     = {};
-const initialized     = {};   // ✅ NEW: track if a pair has been loaded
+const initialized     = {};   // track if a pair has been loaded
+const lastAlertCandle = {};   // candleTime when the last flip alert fired per sym/tf
 
 CONFIG.SYMBOLS.forEach(sym => {
-  historicalData[sym] = {};
-  currentCandles[sym] = {};
-  trendState[sym]     = {};
-  signalLevel[sym]    = {};
-  initialized[sym]    = {};
+  historicalData[sym]  = {};
+  currentCandles[sym]  = {};
+  trendState[sym]      = {};
+  signalLevel[sym]     = {};
+  initialized[sym]     = {};
+  lastAlertCandle[sym] = {};
   CONFIG.TIMEFRAMES.forEach(tf => {
-    historicalData[sym][tf] = [];
-    currentCandles[sym][tf] = null;
-    trendState[sym][tf]     = null;
-    signalLevel[sym][tf]    = null;
-    initialized[sym][tf]    = false;   // ✅ start as not loaded
+    historicalData[sym][tf]  = [];
+    currentCandles[sym][tf]  = null;
+    trendState[sym][tf]      = null;
+    signalLevel[sym][tf]     = null;
+    initialized[sym][tf]     = false;
+    lastAlertCandle[sym][tf] = null;  // no alert fired yet
   });
 });
 
@@ -83,7 +86,26 @@ async function checkTrendChange(symbol, timeframe, newTrend, level, timestamp) {
     return;
   }
 
-  if (prev === newTrend) return;
+  // Always keep trendState current so the next candle's first tick
+  // correctly compares against whatever the trend settled to.
+  trendState[symbol][timeframe]  = newTrend;
+  signalLevel[symbol][timeframe] = level;
+
+  if (prev === newTrend) return;  // no flip — nothing to alert
+
+  // ── One-alert-per-candle gate ─────────────────────────────────
+  // currentCandles[symbol][timeframe].timestamp is the candle's open epoch.
+  // If we already fired an alert during this candle, suppress further flips.
+  const currentCandleTime = currentCandles[symbol][timeframe]?.timestamp ?? null;
+  if (currentCandleTime !== null && lastAlertCandle[symbol][timeframe] === currentCandleTime) {
+    console.log(
+      `[${symbol}][${timeframe}] 🔕 Flip suppressed — alert already fired this candle` +
+      ` (candle: ${currentCandleTime}, flip: ${prev} → ${newTrend})`
+    );
+    return;
+  }
+  // Record that we've now fired an alert for this candle.
+  lastAlertCandle[symbol][timeframe] = currentCandleTime;
 
   const symName  = displayNames[symbol];
   const tfName   = displayNames[timeframe];
@@ -109,9 +131,6 @@ async function checkTrendChange(symbol, timeframe, newTrend, level, timestamp) {
   }
 
   await sendTelegram(message);
-
-  trendState[symbol][timeframe]  = newTrend;
-  signalLevel[symbol][timeframe] = level;
 }
 
 // ─── SUPERTREND MATHS (unchanged) ────────────────────────────────
