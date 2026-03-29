@@ -114,17 +114,13 @@ async function checkTrendChange(symbol, timeframe, newTrend, level, timestamp) {
   let message = '';
   if (newTrend === 'uptrend') {
     message =
-      `🟢 *BUY SIGNAL — LIVE FLIP*\n` +
-      `━━━━━━━━━━━━━━━━━━━━\n` +
-      `*${symName}* | *${tfName}*\n` +
+      `🟢 *Buy* | *${symName}* | *${tfName}*\n` +
       `\n` +
       `*SuperTrend Level:* \`${level.toFixed(4)}\`\n` +
       `Time: ${flipTime}`;
   } else {
     message =
-      `🔴 *SELL SIGNAL — LIVE FLIP*\n` +
-      `━━━━━━━━━━━━━━━━━━━━\n` +
-      `*${symName}* | *${tfName}*\n` +
+      `🔴 *Sell* | *${symName}* | *${tfName}*\n` +
       `\n` +
       `*SuperTrend Level:* \`${level.toFixed(4)}\`\n` +
       `Time: ${flipTime}`;
